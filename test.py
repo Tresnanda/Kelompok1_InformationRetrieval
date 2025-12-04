@@ -1,15 +1,9 @@
-from main import PDFCorpusIndexer
-from main import InvertedIndex  # <-- make sure this line is BEFORE pickle.load
 import pickle
+from main import InvertedIndex
 
-with open("thesis_index.pkl", "rb") as f:
-    index = pickle.load(f)
+# Path to your saved indices
 
-for term in ["data", "uin", "aplikasi", "android"]:
-    postings = index.get_postings(term)
-    print(term, "→", postings)
-    
-print("num_docs =", index.num_docs)
-print("df['data'] =", index.df.get("data"))
-print("df['uin'] =", index.df.get("uin"))
+with open("content_index.pkl", "rb") as f:
+    raw_data = f.read()
 
+print(raw_data[:2000])  # print first 2000 bytes

@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Set
 import PyPDF2
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
+import json
 
 class VBEncoder:
     """Variable Byte Encoding for integer compression"""
@@ -76,11 +77,23 @@ class IndonesianPreprocessor:
         self.stopword_remover = StopWordRemoverFactory().create_stop_word_remover()
         
         # Additional Indonesian stopwords
+        stopwords_path='resources/stopwords-id.txt'
         self.custom_stopwords = {
             'yang', 'dan', 'di', 'dari', 'untuk', 'pada', 'dengan', 'adalah',
             'ini', 'itu', 'ke', 'dalam', 'atau', 'oleh', 'akan', 'telah',
             'dapat', 'juga', 'sebagai', 'tidak', 'ada', 'tersebut', 'sehingga'
         }
+        
+        self.slang_dict = self._load_slang_dict('resouces/merged_slang_dict.json')
+        
+    def _load_slang_dict(self, path) -> Dict[str, str]:
+         try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+         except FileNotFoundError:
+             print(f'Slang dictionary {path} not found')
+             return {}
+        
     
     def remove_noise(self, text: str) -> str:
         """Remove noise: URLs, emails, special characters, numbers"""
@@ -99,6 +112,14 @@ class IndonesianPreprocessor:
         
         return text.strip()
     
+    def normalize_slang(self, text) -> str:
+        if not self.slang_dict:
+            return text
+        
+        words = text.split()
+        normalized = [self.slang_dict.get(word, word) for word in words]
+        return ' '.join(normalized)
+    
     def preprocess(self, text: str) -> List[str]:
         """Complete preprocessing pipeline"""
         # 1. Casefold (lowercase)
@@ -106,6 +127,8 @@ class IndonesianPreprocessor:
         
         # 2. Noise removal
         text = self.remove_noise(text)
+        
+        text = self.normalize_slang(text)
         
         # 3. Stopword removal using Sastrawi
         text = self.stopword_remover.remove(text)
@@ -161,7 +184,7 @@ class InvertedIndex:
             # Separate docIDs and frequencies
             doc_ids = [p[0] for p in postings]
             frequencies = [p[1] for p in postings]
-            
+        
             # Apply gap encoding to docIDs
             gaps = GapEncoder.encode(doc_ids)
             
@@ -481,6 +504,73 @@ class PDFCorpusIndexer:
         final_abstract = re.sub(r'^[A-Z][A-Z\s]*', '', final_abstract)  # Remove initial all-caps
 
         return final_abstract.strip()
+    def extract_core_sections(self, pdf_path: str) -> str:
+        """Extract Abstract, Methodology (Bab III), and Conclusion (Bab V) sections from a thesis PDF"""
+        full_text = ""
+        try:
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page_num, page in enumerate(pdf_reader.pages):
+                    page_text = page.extract_text()
+                    if not page_text:
+                        continue
+                    page_lower = page_text.lower()
+
+                    # Skip pages that are clearly non-content
+                    skip_keywords = [
+                        'daftar isi', 'table of contents', 'lembar pengesahan',
+                        'daftar pustaka', 'references', 'bibliography',
+                        'kata pengantar', 'lembar persetujuan'
+                    ]
+                    if any(keyword in page_lower[:300] for keyword in skip_keywords):
+                        continue
+
+                    full_text += page_text + " "
+        except Exception as e:
+            print(f"Error reading {pdf_path}: {e}")
+            return ""
+
+        text_lower = full_text.lower()
+
+        # --- ABSTRACT ---
+        abstract = self._extract_abstract_section(full_text)
+
+        # --- METHODOLOGY (Bab III) ---
+        methodology = ""
+        bab3_patterns = [
+            r'\bbab\s*iii\b', r'\bbab\s*3\b',
+            r'metode penelitian', r'metodologi penelitian', r'methodology'
+        ]
+        bab4_5_boundaries = [
+            r'\bbab\s*iv\b', r'\bbab\s*4\b',
+            r'\bbab\s*v\b', r'\bbab\s*5\b',
+            r'hasil dan pembahasan', r'results and discussion'
+        ]
+
+        start_m = min([text_lower.find(pat) for pat in bab3_patterns if text_lower.find(pat) != -1] or [len(text_lower)])
+        end_m = min([text_lower.find(pat, start_m + 50) for pat in bab4_5_boundaries if text_lower.find(pat, start_m + 50) != -1] or [len(text_lower)])
+        if start_m != len(text_lower):
+            methodology = full_text[start_m:end_m]
+
+        # --- CONCLUSION (Bab V) ---
+        conclusion = ""
+        bab5_patterns = [
+            r'\bbab\s*v\b', r'\bbab\s*5\b',
+            r'kesimpulan', r'conclusion', r'conclusions'
+        ]
+        end_keywords = [
+            'daftar pustaka', 'references', 'bibliography'
+        ]
+        start_c = min([text_lower.find(pat) for pat in bab5_patterns if text_lower.find(pat) != -1] or [len(text_lower)])
+        end_c = min([text_lower.find(pat, start_c + 50) for pat in end_keywords if text_lower.find(pat, start_c + 50) != -1] or [len(text_lower)])
+        if start_c != len(text_lower):
+            conclusion = full_text[start_c:end_c]
+
+        # Combine all
+        combined = " ".join([abstract, methodology, conclusion])
+        combined = re.sub(r'\s+', ' ', combined)
+        return combined.strip()
+
 
     def extract_text_from_pdf(self, pdf_path: str, filter_sections: bool = True) -> str:
         """Extract text from PDF file with optional section filtering (legacy method)"""
@@ -556,15 +646,17 @@ class PDFCorpusIndexer:
             pdf_path = os.path.join(self.corpus_path, filename)
             abstract = self.extract_abstract_from_pdf(pdf_path)
 
-            if not abstract.strip():
-                print(f"  No abstract found, skipping...")
+            combined_text = self.extract_core_sections(pdf_path)
+            if not combined_text.strip():
+                print(f"  No main sections found, skipping...")
                 continue
+
 
             # Extract title from filename
             title = self.extract_title(abstract, filename)
 
             # Preprocess abstract as content
-            content_tokens = self.preprocessor.preprocess(abstract)
+            content_tokens = self.preprocessor.preprocess(combined_text)
 
             # Preprocess title separately
             title_tokens = self.preprocessor.preprocess(title)
