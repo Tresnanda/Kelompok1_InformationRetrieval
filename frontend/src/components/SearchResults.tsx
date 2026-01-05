@@ -6,18 +6,14 @@ import { FileText, Download, Eye } from 'lucide-react';
 // Import komponen baru
 import SearchFeedback from './SearchFeedback';
 // Asumsi kamu menambahkan prop 'query' dari parent juga untuk dikirim ke feedback
-import { useSearchParams } from 'next/navigation';
+
 
 interface SearchResultsProps {
     results: SearchResult[];
-    // Kita butuh query asli untuk dikirim ke log feedback
-    // Opsional: bisa pass query dari props, atau ambil dari URL param
+    query: string;
 }
 
-export default function SearchResults({ results }: SearchResultsProps) {
-    // Ambil query dari URL parameter untuk keperluan logging
-    const searchParams = useSearchParams();
-    const query = searchParams.get('q') || '';
+export default function SearchResults({ results, query }: SearchResultsProps) {
 
     if (results.length === 0) return null;
 

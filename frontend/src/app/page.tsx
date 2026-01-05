@@ -152,7 +152,7 @@ export default function Home() {
                                 ))}
                             </div>
                         ) : (
-                            data && <SearchResults results={data.data} />
+                            data && <SearchResults results={data.data} query={query} />
                         )}
 
                         {hasSearched && !loading && (!data || data.data.length === 0) && (
